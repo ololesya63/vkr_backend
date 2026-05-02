@@ -45,7 +45,7 @@ async function createDriver() {
  * @returns {string} URL для запроса
  */
 function buildSearchUrl(query, options = {}) {
-    // Базовый URL (можно использовать /search/, но лучше с категорией одежда/обувь, чтобы работали фильтры)
+
     let url = `https://www.ozon.ru/search/?text=${encodeURIComponent(query)}`;
     const params = new URLSearchParams();
 
@@ -60,7 +60,8 @@ function buildSearchUrl(query, options = {}) {
     if (options.minPrice !== undefined && options.maxPrice !== undefined) {
         const minFormatted = `${options.minPrice}.000`;
         const maxFormatted = `${options.maxPrice}.000`;
-        params.set('currency_price', `${minFormatted}%3B${maxFormatted}`);
+        const priceRangeRaw = `${minFormatted};${maxFormatted}`;
+        params.set('currency_price', priceRangeRaw);
     }
 
     // Высокий рейтинг (is_high_rating=t)
@@ -77,7 +78,19 @@ function buildSearchUrl(query, options = {}) {
     if (options.premiumSeller) {
         params.set('is_high_rating_premium_seller', 't');
     }
-
+    if (options.sort) {
+        const sortMap = {
+            'popular': 'rating',
+            'rating': 'rating',
+            'cheap': 'price',
+            'expensive': 'price_desc',
+            'new': 'new'
+        };
+        const sortParam = sortMap[options.sort];
+        if (sortParam) {
+            params.set('sorting', sortParam);
+        }
+    }
     const paramsString = params.toString();
     return paramsString ? `${url}&${paramsString}` : url;
 }

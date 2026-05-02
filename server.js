@@ -14,7 +14,16 @@ app.get("/goods-stream", async (req, res) => {
     if (!query) {
         return res.status(400).json({ error: "Нет query" });
     }
-
+    console.log("📥 Получены параметры:", {
+        query: req.query.query,
+        minPrice: req.query.minPrice,
+        maxPrice: req.query.maxPrice,
+        platforms: req.query.platforms,
+        highRating: req.query.highRating,
+        original: req.query.original,
+        premium: req.query.premium,
+        sort: req.query.sort,
+    });
     // Заголовки для Server-Sent Events
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -54,7 +63,7 @@ app.get("/goods-stream", async (req, res) => {
 
         // Шаг 1: поиск на маркетплейсах
         sendStep(1, "Ищем товары на маркетплейсах");
-
+        console.log('query value:', query, typeof query);
         // Параллельный запуск парсеров (только для выбранных площадок)
         const wbPromise = enableWb ? parseWB(query, filterOptions, 10) : Promise.resolve([]);
         const ozonPromise = enableOzon ? parseOzon(query, filterOptions, 10) : Promise.resolve([]);

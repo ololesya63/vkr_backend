@@ -55,7 +55,7 @@ async function createDriver() {
 
 /**
  * Формирование URL поиска с параметрами фильтрации
- * @param {string} query - поисковый запрос
+ * @param {object} query - поисковый запрос
  * @param {object} options - опции фильтрации
  * @returns {string} URL для запроса
  */
@@ -87,6 +87,22 @@ function buildSearchUrl(query, options = {}) {
     if (options.premiumSeller) {
         params.set('fpremium', '1');
     }
+
+    if (options.sort) {
+        const sortMap = {
+            'popular': 'popular',
+            'rating': 'rate',
+            'cheap': 'priceup',
+            'expensive': 'pricedown',
+            'new': 'newly'
+
+        };
+        const sortParam = sortMap[options.sort];
+        if (sortParam) {
+            params.set('sort', sortParam);
+        }
+    }
+
 
     return `${url}&${params.toString()}`;
 }
