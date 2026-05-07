@@ -1,9 +1,13 @@
+
 import express from "express";
 import { parseWB } from "./parsers/wb.js";
 import { parseOzon } from "./parsers/ozon.js";
 import { groupWithOllama } from "./ollama/grouping.js";
 import { parseOllamaGroups } from "./ollama/parseGroups.js";
 import cors from "cors";
+import {extractDynamicFilters, getWbFiltersViaSelenium} from "./parsers/wbFiltersParser.js";
+import { getOzonFilterHeaders, getOzonFilterValues } from "./parsers/ozonFiltersParser.js";
+
 
 const app = express();
 app.use(cors());
@@ -134,6 +138,84 @@ app.get("/goods", async (req, res) => {
     }
 });
 
+// Эндпоинт, возвращающий только группы с общими значениями
+app.get("/dynamic-filters-final", async (req, res) => {
+    const query = req.query.query;
+    if (!query) return res.status(400).json({ error: "Нет query" });
+
+    // 1. Заголовки с WB и Ozon
+    let wbHeadersRaw = [];
+    let ozonHeadersRaw = [];
+
+    try {
+        const data = await getWbFiltersViaSelenium(query);
+        console.log("DATA: ", data)
+        wbHeadersRaw = extractDynamicFilters(data); // уже содержит { name, key, platform }
+    } catch (err) { console.error("WB headers error", err); }
+    console.log(wbHeadersRaw)
+    try {
+        ozonHeadersRaw = await getOzonFilterHeaders(query); // { name, key, platform }
+    } catch (err) { console.error("Ozon headers error", err); }
+
+    const allHeaders = [...wbHeadersRaw, ...ozonHeadersRaw];
+    if (!allHeaders.length) return res.json([]);
+
+    // 2. Группировка через Ollama
+    const uniqueNamesMap = new Map(); // name -> массив объектов заголовков (с ключами)
+    for (const h of allHeaders) {
+        if (!uniqueNamesMap.has(h.name)) uniqueNamesMap.set(h.name, []);
+        uniqueNamesMap.get(h.name).push(h);
+    }
+    const uniqueNames = Array.from(uniqueNamesMap.keys());
+    let groups = [];
+    try {
+        const prompt = `Сгруппируй похожие по смыслу названия фильтров товаров. Верни JSON: { "Группа": ["название1", "название2"] }. Список: ${JSON.stringify(uniqueNames)}`;
+        const ollamaRes = await fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            body: JSON.stringify({ model: 'llama3', prompt, stream: false })
+        });
+        const ollamaData = await ollamaRes.json();
+        const groupsMap = JSON.parse(ollamaData.response);
+        for (const [groupName, names] of Object.entries(groupsMap)) {
+            const items = [];
+            for (const name of names) {
+                items.push(...(uniqueNamesMap.get(name) || []));
+            }
+            groups.push({ groupName, items });
+        }
+    } catch (err) {
+        console.error("Ollama grouping error, using fallback", err);
+        groups = allHeaders.map(h => ({ groupName: h.name, items: [h] }));
+    }
+
+    // 3. Для каждой группы получить значения и найти пересечение
+    const resultGroups = [];
+    for (const group of groups) {
+        const wbItems = group.items.filter(i => i.platform === 'wb');
+        const ozonItems = group.items.filter(i => i.platform === 'ozon');
+
+        let wbValuesSet = new Set();
+        for (const item of wbItems) {
+            const values = await getWbFilterValues(query, item.key);
+            values.forEach(v => wbValuesSet.add(v));
+        }
+        let ozonValuesSet = new Set();
+        for (const item of ozonItems) {
+            const values = await getOzonFilterValues(query, item.name);
+            values.forEach(v => ozonValuesSet.add(v));
+        }
+
+        const common = [...wbValuesSet].filter(v => ozonValuesSet.has(v));
+        if (common.length > 0) {
+            resultGroups.push({
+                groupName: group.groupName,
+                commonValues: common
+            });
+        }
+    }
+
+    res.json(resultGroups);
+});
 app.listen(3000, () => {
     console.log("🚀 Сервер запущен на http://localhost:3000");
 });

@@ -16,6 +16,7 @@
     "cheerio": "^1.1.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "jsdom": "^29.1.1",
     "ollama": "^0.6.3",
     "playwright": "^1.57.0",
     "puppeteer": "^24.34.0",
