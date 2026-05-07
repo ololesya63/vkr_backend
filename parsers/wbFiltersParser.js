@@ -33,7 +33,6 @@ export async function getWbFiltersViaSelenium(query) {
         // Ждём, пока загрузится контейнер с фильтрами (или любая другая проверка)
         const filtersData = await driver.executeScript(() => {
             const pre = document.getElementsByTagName("pre")[0];
-            console.log("PRE: ", pre)
             if (pre) {
                 return JSON.parse(pre.innerText);
             }
@@ -44,7 +43,7 @@ export async function getWbFiltersViaSelenium(query) {
         console.log(filtersData)
         if (filtersData && filtersData.data && filtersData.data.filters) {
             // Успешно нашли массив фильтров
-            return filtersData.data.filters;
+            return extractDynamicFilters(filtersData.data.filters);
         } else {
             console.warn("Не удалось извлечь фильтры WB через Selenium");
             return [];
@@ -85,9 +84,8 @@ export function extractDynamicFilters(filtersArray) {
         if (!filter.items || !Array.isArray(filter.items) || filter.items.length === 0) continue;
 
         result.push({
-            name: filter.name,
-            key: filter.key,
-            platform: 'wb'
+            ...filter,
+            platform: 'wb',
         });
     }
 

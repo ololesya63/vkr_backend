@@ -1,92 +1,204 @@
 import { Builder, By, until } from "selenium-webdriver";
 import chrome from "selenium-webdriver/chrome.js";
 
+const SLEEP_RANGE = { min: 800, max: 1500 };
+
+const randomSleep = async (min = SLEEP_RANGE.min, max = SLEEP_RANGE.max) => {
+    const ms = Math.random() * (max - min) + min;
+    await new Promise(r => setTimeout(r, ms));
+};
+
 async function createDriver() {
     const options = new chrome.Options();
-    options.addArguments("--headless", "--no-sandbox", "--disable-dev-shm-usage");
-    return new Builder().forBrowser("chrome").setChromeOptions(options).build();
+
+    options.addArguments(
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--window-size=1920,1080',
+        '--disable-gpu',
+        '--disable-dev-shm-usage'
+    );
+
+    options.addArguments(
+        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    return await new Builder()
+        .forBrowser('chrome')
+        .setChromeOptions(options)
+        .build();
 }
 
-/**
- * Получение заголовков фильтров с Ozon.
- * Возвращает массив: { name, key, platform: 'ozon' }
- * key генерируется из имени (транслитерация, нижний регистр, замена пробелов на _).
- */
 export async function getOzonFilterHeaders(query) {
+
     const driver = await createDriver();
-    const url = `https://www.ozon.ru/search/?text=${encodeURIComponent(query)}`;
+
     try {
-        await driver.get(url);
-        await driver.wait(until.elementLocated(By.css('[data-widget="filtersDesktop"]')), 15000);
+
+        await driver.get('https://www.ozon.ru');
+
+        await randomSleep(2000, 4000);
+
+        // поиск как человек
+        const input = await driver.wait(
+            until.elementLocated(By.css('input[name="text"]')),
+            15000
+        );
+
+        await input.click();
+
+        await randomSleep(300, 700);
+
+        await input.sendKeys(query);
+
+        await randomSleep(500, 1200);
+
+        const button = await driver.findElement(
+            By.css('button[type="submit"]')
+        );
+
+        await button.click();
+
+        // ждём загрузку выдачи
+
+        await randomSleep(4000, 6000);
+
+        // ждём фильтры
+        await driver.wait(
+            until.elementLocated(
+                By.css('[data-widget="filtersDesktop"]')
+            ),
+            20000
+        );
+        console.log('10. filtersDesktop найден');
+        // скроллим
+        await driver.executeScript(`
+            window.scrollTo(0, 500);
+        `);
+        await randomSleep(1000, 2000);
+
+// Ждём, пока появятся все заголовки фильтров (хотя бы один)
+        await driver.wait(async () => {
+            const titles = await driver.findElements(By.css('span.ch_7, span.b6v_7'));
+            return titles.length > 5; // ждём, когда станет >5 (цифру можно подобрать)
+        }, 15000);
+
+// Небольшая дополнительная пауза для подгрузки остальных
+        await randomSleep(1000, 2000);
 
         const headers = await driver.executeScript(() => {
-            const container = document.querySelector('[data-widget="filtersDesktop"]');
-            if (!container) return [];
 
-            const blocks = container.querySelectorAll('.ch0_7');
-            const result = [];
             const excludeNames = new Set([
-                'Цена', 'Распродажа', 'Оригинальный товар', 'Официальные магазины бренда',
-                'Рассрочка', 'Баллы за отзывы', 'Сделано в России', 'Больше морковок от Захара',
-                'Доставка'
+                'Цена',
+                'Распродажа',
+                'Оригинальный товар',
+                'Официальные магазины бренда',
+                'Рассрочка',
+                'Баллы за отзывы',
+                'Сделано в России',
+                'Больше морковок от Захара',
+                'Доставка',
+                'Рассрочка 0-0-6',
+                'Высокий рейтинг'
+
             ]);
 
-            for (const block of blocks) {
-                let titleEl = block.querySelector('.b0w_7') || block.querySelector('.ch_7');
-                if (!titleEl) continue;
-                let name = titleEl.innerText.trim().replace(/\(.*?\)/, '').trim();
-                if (!name || excludeNames.has(name)) continue;
+            const result = [];
 
-                // Генерируем ключ из имени (латиница, нижний регистр, подчёркивания)
-                const key = name.toLowerCase()
-                    .replace(/[а-яё]/g, (c) => translitMap[c] || c)
-                    .replace(/[^a-z0-9_]/g, '_')
-                    .replace(/_+/g, '_')
-                    .replace(/^_|_$/g, '');
-                result.push({ name, key, platform: 'ozon' });
+            // ИЩЕМ ВСЕ ВОЗМОЖНЫЕ ЗАГОЛОВКИ
+            const titleElements = document.querySelectorAll(`
+        span.ch_7,
+        span.b6v_7
+    `);
+
+            for (const el of titleElements) {
+
+                let title = el.innerText?.trim();
+
+                if (!title) continue;
+
+                title = title.replace(/\s+/g, ' ').trim();
+
+                if (excludeNames.has(title)) continue;
+
+                if (title.length < 2 || title.length > 60) continue;
+
+                // защита от дублей
+                if (result.some(x => x.name === title)) continue;
+
+                result.push({
+                    name: title,
+                    key: title
+                        .toLowerCase()
+                        .replace(/\s+/g, '_'),
+                    platform: 'ozon'
+                });
             }
+
             return result;
+
         });
+        console.log(headers)
         return headers;
+
     } finally {
         await driver.quit();
     }
 }
-
-/**
- * Получение значений для конкретного фильтра Ozon по его имени.
- * Возвращает массив строк.
- */
 export async function getOzonFilterValues(query, filterName) {
+    console.log(`🔍 Ozon: получаем значения для фильтра "${filterName}"`);
     const driver = await createDriver();
-    const url = `https://www.ozon.ru/search/?text=${encodeURIComponent(query)}`;
+
     try {
+
+        const url = `https://www.ozon.ru/search/?text=${encodeURIComponent(query)}`;
+
         await driver.get(url);
-        await driver.wait(until.elementLocated(By.css('[data-widget="filtersDesktop"]')), 15000);
+
+        await driver.wait(
+            until.elementLocated(By.css('[data-widget="filtersDesktop"]')),
+            20000
+        );
+
+        await driver.sleep(3000);
+
         const values = await driver.executeScript((filterName) => {
-            const blocks = document.querySelectorAll('.ch0_7');
+
+            const blocks = document.querySelectorAll(
+                '[data-widget="filtersDesktop"] .ch0_7'
+            );
+
             for (const block of blocks) {
-                let titleEl = block.querySelector('.b0w_7') || block.querySelector('.ch_7');
-                if (titleEl && titleEl.innerText.trim() === filterName) {
-                    let valueSpans = block.querySelectorAll('.wb9_7 .bq03_5_3-a span');
-                    if (valueSpans.length === 0) {
-                        valueSpans = block.querySelectorAll('.checkbox__text, .radio__text');
-                    }
-                    return Array.from(valueSpans).map(el => el.innerText.trim());
-                }
+
+                const titleEl =
+                    block.querySelector('span.ch_7') ||
+                    block.querySelector('.tsCompactControl500Medium');
+
+                if (!titleEl) continue;
+
+                const title = titleEl.innerText.trim();
+
+                if (title !== filterName) continue;
+
+                const spans = block.querySelectorAll(
+                    'span.tsBody500Medium'
+                );
+
+                const values = Array.from(spans)
+                    .map(el => el.innerText.trim())
+                    .filter(Boolean);
+
+                return [...new Set(values)];
             }
+
             return [];
+
         }, filterName);
+        console.log(`📦 Ozon: для фильтра "${filterName}" найдено значений: ${values.length}`, values.slice(0, 10));
         return values;
+
     } finally {
         await driver.quit();
     }
 }
-
-// Простая таблица транслитерации для ключей (можно расширить)
-const translitMap = {
-    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i',
-    'й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t',
-    'у':'u','ф':'f','х':'h','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y','ь':'',
-    'э':'e','ю':'yu','я':'ya'
-};
