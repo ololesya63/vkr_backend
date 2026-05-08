@@ -5,7 +5,7 @@ import {groupWithOllama} from "./ollama/grouping.js";
 import {parseOllamaGroups} from "./ollama/parseGroups.js";
 import cors from "cors";
 import {extractDynamicFilters, getWbFiltersViaSelenium} from "./parsers/wbFiltersParser.js";
-import {getOzonFilterHeaders, getOzonFilterValues} from "./parsers/ozonFiltersParser.js";
+import {createOzonDriver, getOzonFilterHeaders, getOzonFilterValues} from "./parsers/ozonFiltersParser.js";
 import {ollama} from "./ollama/ollama.js";
 
 const app = express();
@@ -144,6 +144,7 @@ app.get("/dynamic-filters-final", async (req, res) => {
 
     let wbHeadersRaw = [];
     let ozonHeadersRaw = [];
+    let ozonDriver = null;
 
     try {
         wbHeadersRaw = await getWbFiltersViaSelenium(query);
@@ -151,11 +152,26 @@ app.get("/dynamic-filters-final", async (req, res) => {
         console.error("WB headers error", err);
     }
     try {
-        ozonHeadersRaw = await getOzonFilterHeaders(query);
+        ozonDriver = await createOzonDriver();
+        ozonHeadersRaw = await getOzonFilterHeaders(query, ozonDriver);
     } catch (err) {
         console.error("Ozon headers error", err);
     }
-
+// СРАЗУ ПОСЛЕ ПОЛУЧЕНИЯ ЗАГОЛОВКОВ – ВЫВОДИМ ЗНАЧЕНИЯ
+    console.log('\n========== ЗНАЧЕНИЯ ФИЛЬТРОВ ДО OLLAMA ==========');
+    for (const h of wbHeadersRaw) {
+        try {
+            const vals = await getWbFilterValues(query, h.key);
+            console.log(`[WB] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
+        } catch (e) { console.error(`[WB] ${h.name} error:`, e.message); }
+    }
+    for (const h of ozonHeadersRaw) {
+        try {
+            const vals = await getOzonFilterValues(query, h.name, ozonDriver);
+            console.log(`[Ozon] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
+        } catch (e) { console.error(`[Ozon] ${h.name} error:`, e.message); }
+    }
+    console.log('================================================\n');
     const allHeaders = [...wbHeadersRaw, ...ozonHeadersRaw];
     if (!allHeaders.length) return res.json([]);
 
@@ -265,7 +281,7 @@ app.get("/dynamic-filters-final", async (req, res) => {
         }
         let ozonValuesSet = new Set();
         for (const item of ozonItems) {
-            const values = await getOzonFilterValues(query, item.original.name);
+            const values = await getOzonFilterValues(query, item.original.name, ozonDriver);
             values.forEach(v => ozonValuesSet.add(v));
         }
 
@@ -279,6 +295,7 @@ app.get("/dynamic-filters-final", async (req, res) => {
         }
     }
 
+    if (ozonDriver) await ozonDriver.quit().catch(() => {});
     res.json(resultGroups);
 });
 
