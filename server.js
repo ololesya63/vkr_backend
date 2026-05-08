@@ -5,7 +5,7 @@ import {groupWithOllama} from "./ollama/grouping.js";
 import {parseOllamaGroups} from "./ollama/parseGroups.js";
 import cors from "cors";
 import {extractDynamicFilters, getWbFiltersViaSelenium, getWbFilterValues} from "./parsers/wbFiltersParser.js";
-import {createOzonDriver, getOzonFilterHeaders, getOzonFilterValues} from "./parsers/ozonFiltersParser.js";
+import {createOzonDriver, getOzonFilters} from "./parsers/ozonFiltersParser.js";
 import {ollama} from "./ollama/ollama.js";
 
 const app = express();
@@ -164,24 +164,21 @@ app.get("/dynamic-filters-final", async (req, res) => {
     } catch (err) {
         console.error("WB headers error", err);
     }
-    try {
-        ozonDriver = await createOzonDriver();
-        ozonHeadersRaw = await getOzonFilterHeaders(query, ozonDriver);
-    } catch (err) {
-        console.error("Ozon headers error", err);
-    }
     console.log('\n========== ЗНАЧЕНИЯ ФИЛЬТРОВ ДО OLLAMA ==========');
     for (const h of wbHeadersRaw) {
         const vals = getWbFilterValues(h);
         console.log(`[WB] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
     }
     const ozonValuesCache = new Map();
-    for (const h of ozonHeadersRaw) {
-        try {
-            const vals = await getOzonFilterValues(query, h.name, ozonDriver);
-            ozonValuesCache.set(h.name, vals);
-            console.log(`[Ozon] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
-        } catch (e) { console.error(`[Ozon] ${h.name} error:`, e.message); }
+    try {
+        ozonDriver = await createOzonDriver();
+        const ozonFilters = await getOzonFilters(query, ozonDriver);
+        ozonHeadersRaw = ozonFilters;
+        for (const f of ozonFilters) {
+            ozonValuesCache.set(f.name, f.values);
+        }
+    } catch (err) {
+        console.error("Ozon filters error", err);
     }
     console.log('================================================\n');
     const allHeaders = [...wbHeadersRaw, ...ozonHeadersRaw];
