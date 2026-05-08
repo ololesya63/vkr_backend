@@ -4,7 +4,7 @@ import {parseOzon} from "./parsers/ozon.js";
 import {groupWithOllama} from "./ollama/grouping.js";
 import {parseOllamaGroups} from "./ollama/parseGroups.js";
 import cors from "cors";
-import {extractDynamicFilters, getWbFiltersViaSelenium} from "./parsers/wbFiltersParser.js";
+import {extractDynamicFilters, getWbFiltersViaSelenium, getWbFilterValues} from "./parsers/wbFiltersParser.js";
 import {createOzonDriver, getOzonFilterHeaders, getOzonFilterValues} from "./parsers/ozonFiltersParser.js";
 import {ollama} from "./ollama/ollama.js";
 
@@ -137,6 +137,19 @@ app.get("/goods", async (req, res) => {
     }
 });
 
+function intersectValues(wbVals, ozonVals) {
+    const isRange = (vals) => vals.length === 2 && vals.every(v => v !== '' && !isNaN(Number(v)));
+    if (isRange(wbVals) && isRange(ozonVals)) {
+        const min = Math.max(Number(wbVals[0]), Number(ozonVals[0]));
+        const max = Math.min(Number(wbVals[1]), Number(ozonVals[1]));
+        return min <= max ? [String(min), String(max)] : [];
+    }
+    const ozonByLower = new Map(ozonVals.map(v => [v.toLowerCase(), v]));
+    return wbVals
+        .filter(v => ozonByLower.has(v.toLowerCase()))
+        .map(v => ozonByLower.get(v.toLowerCase()));
+}
+
 // Эндпоинт, возвращающий только группы с общими значениями
 app.get("/dynamic-filters-final", async (req, res) => {
     const query = req.query.query;
@@ -157,17 +170,16 @@ app.get("/dynamic-filters-final", async (req, res) => {
     } catch (err) {
         console.error("Ozon headers error", err);
     }
-// СРАЗУ ПОСЛЕ ПОЛУЧЕНИЯ ЗАГОЛОВКОВ – ВЫВОДИМ ЗНАЧЕНИЯ
     console.log('\n========== ЗНАЧЕНИЯ ФИЛЬТРОВ ДО OLLAMA ==========');
     for (const h of wbHeadersRaw) {
-        try {
-            const vals = await getWbFilterValues(query, h.key);
-            console.log(`[WB] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
-        } catch (e) { console.error(`[WB] ${h.name} error:`, e.message); }
+        const vals = getWbFilterValues(h);
+        console.log(`[WB] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
     }
+    const ozonValuesCache = new Map();
     for (const h of ozonHeadersRaw) {
         try {
             const vals = await getOzonFilterValues(query, h.name, ozonDriver);
+            ozonValuesCache.set(h.name, vals);
             console.log(`[Ozon] ${h.name} (${vals.length}): ${vals.slice(0, 10).join(', ')}`);
         } catch (e) { console.error(`[Ozon] ${h.name} error:`, e.message); }
     }
@@ -188,7 +200,7 @@ app.get("/dynamic-filters-final", async (req, res) => {
 
     const input = Object.entries(allItems).map(([id, x]) => `${id} | ${x.platform} | ${x.name}`).join("\n");
     console.log("INPUT TO OLLAMA:\n", input);
-    let groups = [];
+    const pairs = []; // { name, wbItem, ozonItem }
     try {
         const response = await ollama.chat({
             model: "qwen3-vl:235b-cloud",
@@ -240,60 +252,42 @@ app.get("/dynamic-filters-final", async (req, res) => {
 
         console.log("ГРУППЫ: ", parsedGroups)
 
-        const filters = []
-
         for (const groupBlock of parsedGroups) {
-            const wbFilter = allItems[groupBlock[0]]
-            const ozonFilter = allItems[groupBlock[1]]
-
-            filters.push({
-                name: wbFilter.name,
-                wb: wbFilter,
-                ozon: ozonFilter,
-            })
+            const wbItem = allItems[groupBlock[0]];
+            const ozonItem = allItems[groupBlock[1]];
+            if (!wbItem || !ozonItem) continue;
+            pairs.push({ name: wbItem.name, wbItem, ozonItem });
         }
-
-        console.log("Фильтры: ", filters)
+        console.log("Пары: ", pairs);
     } catch (err) {
         console.error("Ollama grouping error, using fallback", err);
-        // fallback: группируем по имени (как было раньше)
         const byName = new Map();
-        for (const item of allItems) {
+        for (const item of Object.values(allItems)) {
             if (!byName.has(item.name)) byName.set(item.name, []);
             byName.get(item.name).push(item);
         }
-        groups = Array.from(byName.values()).filter(g => g.length > 0);
+        for (const items of byName.values()) {
+            const wbItem = items.find(i => i.platform === 'wb');
+            const ozonItem = items.find(i => i.platform === 'ozon');
+            if (wbItem && ozonItem) pairs.push({ name: wbItem.name, wbItem, ozonItem });
+        }
     }
 
-    // 3. Для каждой группы получить значения и найти пересечение
     const resultGroups = [];
-    for (const groupItems of groups) {
-        const wbItems = groupItems.filter(i => i.platform === 'wb');
-        const ozonItems = groupItems.filter(i => i.platform === 'ozon');
-
-        if (wbItems.length === 0 || ozonItems.length === 0) continue; // нет пары
-
-        // Собираем значения для всех wb-фильтров группы (объединение)
-        let wbValuesSet = new Set();
-        for (const item of wbItems) {
-            const values = await getWbFilterValues(query, item.original.key);
-            values.forEach(v => wbValuesSet.add(v));
-        }
-        let ozonValuesSet = new Set();
-        for (const item of ozonItems) {
-            const values = await getOzonFilterValues(query, item.original.name, ozonDriver);
-            values.forEach(v => ozonValuesSet.add(v));
-        }
-
-        const common = [...wbValuesSet].filter(v => ozonValuesSet.has(v));
+    for (const { name, wbItem, ozonItem } of pairs) {
+        const wbVals = getWbFilterValues(wbItem.original);
+        const ozonVals = ozonValuesCache.get(ozonItem.original.name) || [];
+        const common = intersectValues(wbVals, ozonVals);
         if (common.length > 0) {
-            // Имя группы: можно взять имя первого элемента
-            resultGroups.push({
-                groupName: groupItems[0].name,
-                commonValues: common
-            });
+            resultGroups.push({ groupName: name, commonValues: common });
         }
     }
+
+    console.log('\n========== ИТОГОВЫЕ ПЕРЕСЕЧЕНИЯ ==========');
+    for (const g of resultGroups) {
+        console.log(`[${g.groupName}]: ${g.commonValues.join(', ')}`);
+    }
+    console.log('==========================================\n');
 
     if (ozonDriver) await ozonDriver.quit().catch(() => {});
     res.json(resultGroups);

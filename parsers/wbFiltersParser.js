@@ -91,3 +91,10 @@ export function extractDynamicFilters(filtersArray) {
 
     return result;
 }
+
+export function getWbFilterValues(filterHeader) {
+    if (filterHeader.minVal !== undefined && filterHeader.maxVal !== undefined) {
+        return [String(filterHeader.minVal), String(filterHeader.maxVal)];
+    }
+    return (filterHeader.items || []).map(i => i.name?.trim()).filter(Boolean);
+}
