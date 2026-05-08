@@ -137,17 +137,32 @@ app.get("/goods", async (req, res) => {
     }
 });
 
-function intersectValues(wbVals, ozonVals) {
+function buildFilterGroup(groupName, wbVals, ozonVals) {
     const isRange = (vals) => vals.length === 2 && vals.every(v => v !== '' && !isNaN(Number(v)));
+
     if (isRange(wbVals) && isRange(ozonVals)) {
-        const min = Math.max(Number(wbVals[0]), Number(ozonVals[0]));
-        const max = Math.min(Number(wbVals[1]), Number(ozonVals[1]));
-        return min <= max ? [String(min), String(max)] : [];
+        const min = Math.min(Number(wbVals[0]), Number(ozonVals[0]));
+        const max = Math.max(Number(wbVals[1]), Number(ozonVals[1]));
+        return { groupName, type: 'range', min: String(min), max: String(max) };
     }
-    const ozonByLower = new Map(ozonVals.map(v => [v.toLowerCase(), v]));
-    return wbVals
-        .filter(v => ozonByLower.has(v.toLowerCase()))
-        .map(v => ozonByLower.get(v.toLowerCase()));
+
+    if (!isRange(wbVals) && !isRange(ozonVals)) {
+        const result = [];
+        const seen = new Map();
+        for (const v of wbVals) {
+            const lower = v.toLowerCase();
+            if (!seen.has(lower)) { seen.set(lower, result.length); result.push({ value: v, platforms: ['wb'] }); }
+        }
+        for (const v of ozonVals) {
+            const lower = v.toLowerCase();
+            if (seen.has(lower)) { result[seen.get(lower)].platforms.push('ozon'); }
+            else { seen.set(lower, result.length); result.push({ value: v, platforms: ['ozon'] }); }
+        }
+        if (!result.length) return null;
+        return { groupName, type: 'text', values: result };
+    }
+
+    return null;
 }
 
 // Эндпоинт, возвращающий только группы с общими значениями
@@ -274,17 +289,16 @@ app.get("/dynamic-filters-final", async (req, res) => {
     for (const { name, wbItem, ozonItem } of pairs) {
         const wbVals = getWbFilterValues(wbItem.original);
         const ozonVals = ozonValuesCache.get(ozonItem.original.name) || [];
-        const common = intersectValues(wbVals, ozonVals);
-        if (common.length > 0) {
-            resultGroups.push({ groupName: name, commonValues: common });
-        }
+        const group = buildFilterGroup(name, wbVals, ozonVals);
+        if (group) resultGroups.push(group);
     }
 
-    console.log('\n========== ИТОГОВЫЕ ПЕРЕСЕЧЕНИЯ ==========');
+    console.log('\n========== ИТОГОВЫЕ ФИЛЬТРЫ ==========');
     for (const g of resultGroups) {
-        console.log(`[${g.groupName}]: ${g.commonValues.join(', ')}`);
+        if (g.type === 'range') console.log(`[${g.groupName}]: range ${g.min}–${g.max}`);
+        else console.log(`[${g.groupName}]: ${g.values.map(v => `${v.value}(${v.platforms.join('+')})`).slice(0, 8).join(', ')}`);
     }
-    console.log('==========================================\n');
+    console.log('======================================\n');
 
     if (ozonDriver) await ozonDriver.quit().catch(() => {});
     res.json(resultGroups);

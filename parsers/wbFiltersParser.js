@@ -81,7 +81,9 @@ export function extractDynamicFilters(filtersArray) {
     for (const filter of filtersArray) {
         if (excludeKeys.includes(filter.key)) continue;
 
-        if (!filter.items || !Array.isArray(filter.items) || filter.items.length === 0) continue;
+        const hasItems = filter.items && Array.isArray(filter.items) && filter.items.length > 0;
+        const hasRange = filter.from !== undefined && filter.to !== undefined;
+        if (!hasItems && !hasRange) continue;
 
         result.push({
             ...filter,
@@ -93,8 +95,8 @@ export function extractDynamicFilters(filtersArray) {
 }
 
 export function getWbFilterValues(filterHeader) {
-    if (filterHeader.minVal !== undefined && filterHeader.maxVal !== undefined) {
-        return [String(filterHeader.minVal), String(filterHeader.maxVal)];
+    if (filterHeader.from !== undefined && filterHeader.to !== undefined) {
+        return [String(filterHeader.from), String(filterHeader.to)];
     }
     return (filterHeader.items || []).map(i => i.name?.trim()).filter(Boolean);
 }
