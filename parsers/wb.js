@@ -35,7 +35,12 @@ async function createDriver() {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--window-size=1280,900",
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "--lang=ru-RU",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--log-level=3",
+        "--silent",
     );
     options.excludeSwitches(["enable-automation"]);
     return new Builder().forBrowser("chrome").setChromeOptions(options).build();
@@ -66,6 +71,17 @@ function buildSearchUrl(query, options = {}) {
         };
         const sortParam = sortMap[options.sort];
         if (sortParam) params.set('sort', sortParam);
+    }
+
+    if (options.wbDynamicFilters?.length) {
+        for (const f of options.wbDynamicFilters) {
+            if (!f.key) continue;
+            if (f.type === 'text' && f.ids?.length) {
+                params.set(f.key, f.ids.join(';'));
+            } else if (f.type === 'range' && f.min != null && f.max != null) {
+                params.set(f.key, `${f.min};${f.max}`);
+            }
+        }
     }
 
     return `${url}&${params.toString()}`;
@@ -116,7 +132,11 @@ export async function parseWB(query, options = {}, maxProducts = 10) {
             // Открываем новую вкладку
             await driver.switchTo().newWindow('tab');
             await driver.get(card.link);
-            await driver.sleep(2000); // небольшая задержка, можно подобрать
+
+            // Ждём хлебных крошек — признак что основной контент загружен
+            try {
+                await driver.wait(until.elementLocated(By.css(SELECTORS.BREADCRUMBS_LIST)), 10000);
+            } catch { /* продолжаем даже если не появились */ }
 
             try {
                 await driver.wait(async () => {
@@ -124,7 +144,7 @@ export async function parseWB(query, options = {}, maxProducts = 10) {
                     const el2 = await driver.findElements(By.css("[class*='sellerWrap']"));
                     const el3 = await driver.findElements(By.css("[class*='sellerInfoDefaultNameText']"));
                     return el1.length > 0 || el2.length > 0 || el3.length > 0;
-                }, 7000);
+                }, 6000);
             } catch {
                 console.log("⚠️ seller блок не найден");
             }

@@ -10,23 +10,15 @@ import {ollama} from "./ollama/ollama.js";
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 // SSE-эндпоинт с передачей шагов
-app.get("/goods-stream", async (req, res) => {
-    const query = req.query.query;
+app.post("/goods-stream", async (req, res) => {
+    const { query, minPrice, maxPrice, highRating, original, premium, sort, platforms, wbDynamicFilters, ozonDynamicFilters } = req.body || {};
     if (!query) {
         return res.status(400).json({error: "Нет query"});
     }
-    console.log("📥 Получены параметры:", {
-        query: req.query.query,
-        minPrice: req.query.minPrice,
-        maxPrice: req.query.maxPrice,
-        platforms: req.query.platforms,
-        highRating: req.query.highRating,
-        original: req.query.original,
-        premium: req.query.premium,
-        sort: req.query.sort,
-    });
+    console.log("📥 Получены параметры:", { query, minPrice, maxPrice, platforms, highRating, original, premium, sort });
     // Заголовки для Server-Sent Events
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -40,36 +32,29 @@ app.get("/goods-stream", async (req, res) => {
     };
 
     try {
-        // Параметры фильтрации из строки запроса
-        const minPrice = req.query.minPrice ? parseInt(req.query.minPrice) : undefined;
-        const maxPrice = req.query.maxPrice ? parseInt(req.query.maxPrice) : undefined;
-        const highRating = req.query.highRating === 'true';
-        const original = req.query.original === 'true';
-        const premium = req.query.premium === 'true';
-        const sort = req.query.sort || 'popular';   // пока не используется, но можно передать
-
-        // Какие маркетплейсы включены (по умолчанию оба)
-        const platformsParam = req.query.platforms || 'wb,ozon';
+        const platformsParam = platforms || 'wb,ozon';
         const platformList = platformsParam.split(',');
         const enableWb = platformList.includes('wb');
         const enableOzon = platformList.includes('ozon');
 
         const filterOptions = {
-            minPrice,
-            maxPrice,
-            highRating,
-            isOriginal: original,
-            premiumSeller: premium,
-            sort,
-            marketplaces: {wb: enableWb, ozon: enableOzon}
+            minPrice: minPrice != null ? parseInt(minPrice) : undefined,
+            maxPrice: maxPrice != null ? parseInt(maxPrice) : undefined,
+            highRating: highRating === true || highRating === 'true',
+            isOriginal: original === true || original === 'true',
+            premiumSeller: premium === true || premium === 'true',
+            sort: sort || 'popular',
+            marketplaces: {wb: enableWb, ozon: enableOzon},
+            wbDynamicFilters: wbDynamicFilters || [],
+            ozonDynamicFilters: ozonDynamicFilters || [],
         };
 
         // Шаг 1: поиск на маркетплейсах
         sendStep(1, "Ищем товары на маркетплейсах");
         console.log('query value:', query, typeof query);
         // Параллельный запуск парсеров (только для выбранных площадок)
-        const wbPromise = enableWb ? parseWB(query, filterOptions, 10) : Promise.resolve([]);
-        const ozonPromise = enableOzon ? parseOzon(query, filterOptions, 10) : Promise.resolve([]);
+        const wbPromise = enableWb ? parseWB(query, filterOptions, 30) : Promise.resolve([]);
+        const ozonPromise = enableOzon ? parseOzon(query, filterOptions, 30) : Promise.resolve([]);
 
         const [wbProducts, ozonProducts] = await Promise.all([wbPromise, ozonPromise]);
 
@@ -122,8 +107,8 @@ app.get("/goods", async (req, res) => {
             marketplaces: {wb: enableWb, ozon: enableOzon}
         };
 
-        const wbPromise = enableWb ? parseWB(query, filterOptions, 10) : Promise.resolve([]);
-        const ozonPromise = enableOzon ? parseOzon(query, filterOptions, 10) : Promise.resolve([]);
+        const wbPromise = enableWb ? parseWB(query, filterOptions, 30) : Promise.resolve([]);
+        const ozonPromise = enableOzon ? parseOzon(query, filterOptions, 30) : Promise.resolve([]);
 
         const [wbProducts, ozonProducts] = await Promise.all([wbPromise, ozonPromise]);
         const allProducts = [...wbProducts, ...ozonProducts];
@@ -137,13 +122,13 @@ app.get("/goods", async (req, res) => {
     }
 });
 
-function buildFilterGroup(groupName, wbVals, ozonVals) {
+function buildFilterGroup(groupName, wbFilter, wbVals, ozonVals) {
     const isRange = (vals) => vals.length === 2 && vals.every(v => v !== '' && !isNaN(Number(v)));
 
     if (isRange(wbVals) && isRange(ozonVals)) {
         const min = Math.min(Number(wbVals[0]), Number(ozonVals[0]));
         const max = Math.max(Number(wbVals[1]), Number(ozonVals[1]));
-        return { groupName, type: 'range', min: String(min), max: String(max) };
+        return { groupName, type: 'range', min: String(min), max: String(max), wbKey: wbFilter.key };
     }
 
     if (!isRange(wbVals) && !isRange(ozonVals)) {
@@ -151,7 +136,11 @@ function buildFilterGroup(groupName, wbVals, ozonVals) {
         const seen = new Map();
         for (const v of wbVals) {
             const lower = v.toLowerCase();
-            if (!seen.has(lower)) { seen.set(lower, result.length); result.push({ value: v, platforms: ['wb'] }); }
+            const wbItem = wbFilter.items?.find(i => i.name?.trim().toLowerCase() === lower);
+            if (!seen.has(lower)) {
+                seen.set(lower, result.length);
+                result.push({ value: v, platforms: ['wb'], wbId: wbItem?.id != null ? String(wbItem.id) : undefined });
+            }
         }
         for (const v of ozonVals) {
             const lower = v.toLowerCase();
@@ -159,7 +148,7 @@ function buildFilterGroup(groupName, wbVals, ozonVals) {
             else { seen.set(lower, result.length); result.push({ value: v, platforms: ['ozon'] }); }
         }
         if (!result.length) return null;
-        return { groupName, type: 'text', values: result };
+        return { groupName, type: 'text', values: result, wbKey: wbFilter.key };
     }
 
     return null;
@@ -215,7 +204,8 @@ app.get("/dynamic-filters-final", async (req, res) => {
     const pairs = []; // { name, wbItem, ozonItem }
     try {
         const response = await ollama.chat({
-            model: "qwen3-vl:235b-cloud",
+            //model: "qwen3-vl:235b-cloud",
+            model: "gemma4:31b-cloud",
             messages: [
                 {
                     role: "system",
@@ -289,7 +279,7 @@ app.get("/dynamic-filters-final", async (req, res) => {
     for (const { name, wbItem, ozonItem } of pairs) {
         const wbVals = getWbFilterValues(wbItem.original);
         const ozonVals = ozonValuesCache.get(ozonItem.original.name) || [];
-        const group = buildFilterGroup(name, wbVals, ozonVals);
+        const group = buildFilterGroup(name, wbItem.original, wbVals, ozonVals);
         if (group) resultGroups.push(group);
     }
 

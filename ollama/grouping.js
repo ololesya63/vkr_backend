@@ -8,10 +8,12 @@ export async function groupWithOllama(products) {
     const input = prepared
         .map(p => `${p.id} | ${p.product.title || p.product.name}`)
         .join("\n");
+    console.log(input);
 
 
     const response = await ollama.chat({
-        model: "qwen3-vl:235b-cloud",
+        //model: "qwen3-vl:235b-cloud",
+        model: "gemma4:31b-cloud",
         messages: [
             {
                 role: "system",

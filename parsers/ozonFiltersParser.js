@@ -13,9 +13,14 @@ async function createDriver() {
         '--disable-setuid-sandbox',
         '--window-size=1920,1080',
         '--disable-gpu',
-        '--disable-dev-shm-usage'
+        '--disable-dev-shm-usage',
+        '--lang=ru-RU',
+        '--log-level=3',
+        '--silent',
     );
     options.addArguments('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    options.excludeSwitches(['enable-automation']);
+
     return await new Builder().forBrowser('chrome').setChromeOptions(options).build();
 }
 
