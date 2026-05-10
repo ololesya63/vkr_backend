@@ -49,21 +49,20 @@ app.post("/goods-stream", async (req, res) => {
             ozonDynamicFilters: ozonDynamicFilters || [],
         };
 
-        // Шаг 1: поиск на маркетплейсах
-        sendStep(1, "Ищем товары на маркетплейсах");
+        // Шаг 1: запрос принят, фильтры готовы
+        sendStep(1, "Обрабатываем запрос");
+
+        // Шаг 2: запускаем поиск на маркетплейсах
+        sendStep(2, "Ищем товары на маркетплейсах");
         console.log('query value:', query, typeof query);
-        // Параллельный запуск парсеров (только для выбранных площадок)
         const wbPromise = enableWb ? parseWB(query, filterOptions, 30) : Promise.resolve([]);
         const ozonPromise = enableOzon ? parseOzon(query, filterOptions, 30) : Promise.resolve([]);
 
         const [wbProducts, ozonProducts] = await Promise.all([wbPromise, ozonPromise]);
-
-        // Шаг 2: сбор предложений
-        sendStep(2, "Собираем предложения");
         const allProducts = [...wbProducts, ...ozonProducts];
 
-        // Шаг 3: объединение и группировка
-        sendStep(3, "Объединяем и группируем");
+        // Шаг 3: группируем (после реального await парсинга)
+        sendStep(3, "Группируем товары");
         const {raw, prepared} = await groupWithOllama(allProducts);
         const groups = parseOllamaGroups(raw, prepared);
 
